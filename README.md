@@ -1,5 +1,13 @@
 # Static SOR Back-Test
+## Usage
 
+```bash
+# Run on provided data:
+python backtest.py l1_day.csv
+
+# Or point at any other CSV with the same schema:
+python backtest.py your_data.csv
+```
 ## 1. Code structure
 - **backtest.py**  
   - **load_snapshots**: read `l1_day.csv`, dedupe per (`ts_event`,`publisher_id`), yield time-ordered Level-1 snapshots  
@@ -35,15 +43,27 @@ We must balance three competing objectives—avoiding under-fills, preventing ov
    - **Small changes** can shift allocation toward faster-filling venues  
    - **Grid**: 0 to 0.005 $, with 50 fine steps  
 
+4. **Grid Search Methodology**
+   - Perform a systematic nested-loop scan over the three parameters to find the cost minimum:
+   - 1.Define evenly spaced values in each range. 
+   - 2.For each combination, run a full back-test (backtest_static) and record total cash spent. 
+   - 3.Use lru_cache to avoid recomputing identical allocation calls. 
+   - 4.Parallelize the outer loops with concurrent.futures to utilize multiple CPU cores. 
+   - This caching + parallel evaluation ensures the entire grid (e.g. 20×20×20 points) completes in under two minutes on a standard laptop.
+
 We cache backtest results (`lru_cache`) and parallelize grid evaluations (`concurrent.futures`) to keep total runtime under two minutes.
 
-## 3. Suggested improvements
-1. **Overbooking simulation**  
-   - In reality, traders often place slightly more shares than needed across venues, then cancel unfilled orders (“phantom liquidity”).  
-   - _Extension_: allow the allocator to overshoot S by a configurable fraction, then subtract filled shares and revoke the remainder, to better match empirical fill correlations.  
-2. **Empirical slippage model**  
-   - Each execution tranche can move the mid-price slightly.  
-   - _Extension_: add a small linear price impact term proportional to executed volume per snapshot.  
-3. **Adaptive urgency**  
-   - Market conditions vary: if recent spread volatility is high, under-fill penalty should increase.  
-   - _Extension_: tie λ_under to a rolling estimate of mid-quote variance, so the router self-adjusts in fast markets.  
+
+## 3. Suggested improvement：Overbooking Simulation
+**What & Why:**
+Traders routinely place slightly more shares than needed across venues to exploit uncorrelated queue fills—a practice known as overbooking. They then cancel any unfilled orders once the target is reached. This behavior boosts fill probability and reduces execution risk.
+
+**How to Implement**
+1. **Allow Overshoot**  
+   - in allocate, permit sums of splits to exceed ORDER_SIZE by up to a fraction (e.g. 5–10%).
+2. **Simulate Partial Fills**  
+   - execute snapshots as usual, tracking both filled and overbooked shares.
+3. **Cancel Excess**  
+   - once cumulative fills ≥ ORDER_SIZE, remove any remaining excess from execution and rebate them at the benchmark price.
+4. **Adjust Cost**  
+   - include cancellation cost or rebate recovery in compute_cost to reflect real-world rebate claw-backs.
